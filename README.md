@@ -1,1 +1,1 @@
-# elm-lenient-url
+# elm-smart-url
