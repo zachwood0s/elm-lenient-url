@@ -5,17 +5,46 @@ import Parser exposing (Parser, oneOf, map, keyword, (|.), (|=), symbol, succeed
 import Regex exposing (Regex)
 import Maybe
 
-fromString str = Parser.run urlParser str
+type alias SmartUrl =
+  { protocol : Maybe Protocol
+  , hostname : String 
+  , port_    : Maybe Int 
+  , path     : String 
+  , query    : Maybe String 
+  , fragment : Maybe String 
+  }
+
+
+smartUrlToUrl : SmartUrl -> Maybe Url 
+smartUrlToUrl smart = 
+  let
+    buildUrl protocol smartUrl = 
+      Url protocol smartUrl.hostname smartUrl.port_ smartUrl.path smartUrl.query smartUrl.fragment
+  in
+    validateHostname smart.protocol smart.hostname 
+    |> mapFromBool (buildUrl (Maybe.withDefault Http smart.protocol) smart)
+
+mapFromBool : a -> Bool -> Maybe a
+mapFromBool elem succeeded =
+  if succeeded then Just elem
+  else Nothing
+
+fromString : String -> Maybe Url
+fromString str 
+  = Parser.run urlParser str 
+    |> Result.toMaybe 
+    |> Maybe.andThen smartUrlToUrl
   
-urlParser : Parser Url 
+urlParser : Parser SmartUrl 
 urlParser = 
-  succeed Url 
-    |= Parser.map (Maybe.withDefault Http) (optionally chompProtocol)
+  succeed SmartUrl 
+    |= optionally chompProtocol
     |= chompHostname
     |= optionally chompPort
     |= chompPath
-    |= Parser.map (\_ -> Nothing) (succeed "")
-    |= Parser.map (\_ -> Nothing) (succeed "")
+    |= optionally chompQuery
+    |= optionally chompFragment
+    |. Parser.end
 
 chompProtocol : Parser Protocol
 chompProtocol =
@@ -24,17 +53,15 @@ chompProtocol =
     , map (\_ -> Https) (symbol "https://")
     ]
 
+validateHostname : Maybe Protocol -> String -> Bool 
+validateHostname protocol authority =
+  case protocol of 
+    Just _ -> Regex.contains hostnameValid authority 
+    Nothing -> Regex.contains hostnameValidNoProtocol authority
+
 chompHostname : Parser String 
 chompHostname =
-  let 
-    valid authority =
-      if Regex.contains hostnameValid authority then
-        Parser.succeed authority 
-      else 
-        Parser.problem "Invalid hostname!"
-  in
     Parser.getChompedString (Parser.chompWhile (\c -> Char.isAlphaNum c || c == '.'))
-      |> Parser.andThen valid
 
 chompPort : Parser Int
 chompPort =
@@ -53,6 +80,18 @@ chompPath =
     Parser.getChompedString (Parser.chompWhile (\c -> c /= '?' && c /= '#'))
       |> Parser.andThen makeValid
 
+chompQuery : Parser String
+chompQuery = 
+  Parser.succeed identity
+    |. symbol "?"
+    |= Parser.getChompedString (Parser.chompUntilEndOr "#")
+
+chompFragment : Parser String
+chompFragment = 
+  Parser.succeed identity 
+    |. symbol "#"
+    |= Parser.getChompedString (Parser.chompWhile (\_ -> True))
+
 optionally : Parser a -> Parser (Maybe a)
 optionally parser =
   oneOf 
@@ -66,7 +105,13 @@ optionally parser =
    Made a few minor tweaks to require at least one '.' in it. This is so we know its actually attempting to reference a site.
    e.g. before it would match "google" but now it requires "google.com" or something similar
 -}
+hostnameValidNoProtocol : Regex 
+hostnameValidNoProtocol = 
+  Maybe.withDefault Regex.never <|
+    Regex.fromString "^(([a-zA-Z0-9]|[a-zA-Z0-9][a-zA-Z0-9\\-]*[a-zA-Z0-9])\\.)+([A-Za-z0-9]|[A-Za-z0-9][A-Za-z0-9\\-]*[A-Za-z0-9])$"
+
 hostnameValid : Regex 
 hostnameValid = 
   Maybe.withDefault Regex.never <|
-    Regex.fromString "^(([a-zA-Z0-9]|[a-zA-Z0-9][a-zA-Z0-9\\-]*[a-zA-Z0-9])\\.)+([A-Za-z0-9]|[A-Za-z0-9][A-Za-z0-9\\-]*[A-Za-z0-9])$"
+    Regex.fromString "^(([a-zA-Z0-9]|[a-zA-Z0-9][a-zA-Z0-9\\-]*[a-zA-Z0-9])\\.)*([A-Za-z0-9]|[A-Za-z0-9][A-Za-z0-9\\-]*[A-Za-z0-9])$"
+
